@@ -6,6 +6,8 @@ import { Server, Socket } from "socket.io";
 import { ClientToServerEvents, ServerToClientEvents } from "@shared/types/SocketTypes";
 import prisma from "../prisma";
 import { createUser, deleteUser, getUser, getUsersInRoom } from "../services/UserService";
+import { getRoom, getRooms } from "../services/RoomService";
+import { createMessage, getLatestMessages } from "../services/MessageService";
 
 // Create a new debug instance
 const debug = Debug("chat:socket_controller");
@@ -26,11 +28,7 @@ export const handleConnection = (
 		debug("🏨 Got request for rooms");
 
 		// Query database for list of rooms
-		const rooms = await prisma.room.findMany({
-			orderBy: {
-				name: "asc",
-			},
-		});
+		const rooms = await getRooms();
 		debug("🏨 Found rooms, sending list of rooms %o", rooms);
 
 		// Send room list
@@ -40,11 +38,16 @@ export const handleConnection = (
 	});
 
 	// Listen for incoming chat messages
-	socket.on("sendChatMessage", (msg) => {
+	socket.on("sendChatMessage", async (msg) => {
 		debug('📨 New chat message', socket.id, msg);
 
 		// Broadcast message to everyone connected EXCEPT the sender
 		socket.to(msg.roomId).emit("chatMessage", msg);
+		debug("📢 Broadcasted chat message");
+
+		// Save message to db
+		await createMessage(msg);
+		debug("🏊‍♀️ Saved chat message");
 	});
 
 	// Listen for a user join request
@@ -52,11 +55,7 @@ export const handleConnection = (
 		debug("👶🏽 User %s wants to join the room %s", username, roomId);
 
 		// Get room from database
-		const room = await prisma.room.findUnique({
-			where: {
-				id: roomId,
-			}
-		});
+		const room = await getRoom(roomId);
 
 		// If room was not found, respond with success=false
 		if (!room) {
@@ -81,6 +80,9 @@ export const handleConnection = (
 		// Retrieve a list of Users for the Room
 		const usersInRoom = await getUsersInRoom(roomId);
 
+		// Retrieve messages sent to the Room
+		const messages = await getLatestMessages(roomId, 24 * 60 * 60);
+
 		// Respond with room info
 		// (here we could also check the username and deny access if it was already in use)
 		callback({
@@ -88,6 +90,7 @@ export const handleConnection = (
 			room: {
 				id: room.id,
 				name: room.name,
+				messages,
 				users: usersInRoom,  // Send the user the list of users in the room
 			},
 		});
